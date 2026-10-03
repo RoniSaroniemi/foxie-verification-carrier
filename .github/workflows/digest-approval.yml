@@ -1,0 +1,74 @@
+name: Digest approval
+on:
+  workflow_dispatch:
+    inputs:
+      stage:
+        type: choice
+        required: true
+        options: [journal-admission, publication]
+      manifest_digest:
+        type: string
+        required: true
+permissions: {}
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      stage: ${{ steps.validate.outputs.stage }}
+      digest: ${{ steps.validate.outputs.digest }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - id: validate
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b
+        with:
+          script: |
+            const { classifiedInput, approvalComment } = await import(`${process.env.GITHUB_WORKSPACE}/gate.mjs`);
+            const input = classifiedInput(context.payload.inputs);
+            core.setOutput('stage', input.stage);
+            core.setOutput('digest', input.manifestDigest);
+            await core.summary.addCodeBlock(approvalComment(context.payload.inputs, context.runId, Number(process.env.GITHUB_RUN_ATTEMPT))).write();
+  sign:
+    needs: validate
+    runs-on: ubuntu-24.04
+    environment:
+      name: ${{ needs.validate.outputs.stage == 'journal-admission' && 'digest-journal-admission' || 'digest-publication' }}
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - id: approved
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b
+        with:
+          script: |
+            const { approvedPredicate, ENVIRONMENTS } = await import(`${process.env.GITHUB_WORKSPACE}/gate.mjs`);
+            const stage = context.payload.inputs.stage;
+            const name = ENVIRONMENTS[stage];
+            if (!name) throw new Error('DIGEST_STAGE_INVALID');
+            const params = { ...context.repo, environment_name: name };
+            const environment = (await github.rest.repos.getEnvironment(params)).data;
+            const policies = (await github.rest.repos.listDeploymentBranchPolicies(params)).data;
+            const reviews = (await github.request('GET /repos/{owner}/{repo}/actions/runs/{run_id}/approvals', { ...context.repo, run_id: context.runId })).data;
+            const predicate = approvedPredicate(context.payload.inputs, {
+              repo: `${context.repo.owner}/${context.repo.repo}`, repositoryId: context.payload.repository.id,
+              ref: context.ref, event: context.eventName, actorId: context.payload.sender.id,
+              sha: context.sha, runId: context.runId, runAttempt: Number(process.env.GITHUB_RUN_ATTEMPT)
+            }, environment, policies, reviews);
+            core.setOutput('predicate', JSON.stringify(predicate));
+      - uses: actions/attest@daf44fb950173508f38bd2406030372c1d1162b1
+        with:
+          subject-name: sealed-manifest
+          subject-digest: ${{ needs.validate.outputs.digest }}
+          predicate-type: https://github.com/RoniSaroniemi/foxie-verification-carrier/digest-approval/v1
+          predicate: ${{ steps.approved.outputs.predicate }}
+          show-summary: false
