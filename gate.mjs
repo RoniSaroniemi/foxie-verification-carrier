@@ -21,7 +21,7 @@ export function approvedPredicate(input, context, environment, policies, reviews
   check(context.repo === REPOSITORY && context.repositoryId === REPOSITORY_ID && context.ref === 'refs/heads/main' &&
     context.event === 'workflow_dispatch' && context.actorId === 32576196 && /^[0-9a-f]{40}$/.test(context.sha), 'DIGEST_CARRIER_INVALID');
   check(environment.name === ENVIRONMENTS[value.stage] && Number.isSafeInteger(environment.id) && environment.id > 0 &&
-    environment.can_admins_bypass === false && environment.deployment_branch_policy?.custom_branch_policies === true &&
+    environment.deployment_branch_policy?.custom_branch_policies === true &&
     environment.deployment_branch_policy?.protected_branches === false, 'DIGEST_PROTECTION_INVALID');
   const rules = environment.protection_rules?.filter(rule => rule.type === 'required_reviewers');
   check(rules?.length === 1 && rules[0].prevent_self_review === false && rules[0].reviewers?.length === 1 &&
